@@ -1,0 +1,154 @@
+service: serverless-otel-aws-sandbox
+
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  runtime: python3.11
+  # Override with SANDBOX_AWS_REGION/DD_SITE env vars to point this stack
+  # at a different region or Datadog site (e.g. a customer's EU1/US5/AP1
+  # setup) without hand-editing this file. Deliberately not AWS_REGION --
+  # that var is already exported in many shells/CI environments for
+  # unrelated reasons, and this stack's layer ARNs are pinned to versions
+  # verified in us-east-1, so silently inheriting an ambient AWS_REGION
+  # would deploy to the wrong region with no warning. See the root
+  # README's "Layer versions" section for what's pinned and why.
+  region: ${env:SANDBOX_AWS_REGION, 'us-east-1'}
+  memorySize: 256
+  timeout: 15
+  # Sandbox log groups default to never-expire otherwise; 7 days is
+  # plenty for a sandbox and keeps teardown from leaving CloudWatch
+  # costs behind indefinitely. Applies to every function in this stack.
+  logRetentionInDays: 7
+  environment:
+    DD_API_KEY: ${env:DD_API_KEY}
+    DD_SITE: ${env:DD_SITE, 'datadoghq.com'}
+  # sts:GetCallerIdentity needs no IAM permission at all (AWS grants it
+  # unconditionally) -- this repo doesn't grant it. See the root README's
+  # "Known issues and references" / Phase 2 item 10 note if you're
+  # comparing this against the other three language stacks.
+
+package:
+  individually: true
+  patterns:
+    - '!**'
+
+functions:
+  otelSandbox:
+    handler: handler.lambda_handler
+    package:
+      patterns:
+        - 'handler.py'
+        - 'vendor/**'
+    environment:
+      # Round 3 test: plain DD_ENV, no OTel deployment.environment resource
+      # attribute (removed from handler.py). See FINDINGS.md "Round 3".
+      DD_ENV: sandbox
+      # Only functions 1-2 attach the Extension, so only they need this.
+      DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT: localhost:4318
+    layers:
+      # Verified against this version -- see root README "Layer versions".
+      - arn:aws:lambda:${env:SANDBOX_AWS_REGION, 'us-east-1'}:464622532012:layer:Datadog-Extension:${env:DD_EXTENSION_VERSION, '101'}
+
+  # Round 2, test 1: native ddtrace + OTel API bridge, per "OpenTelemetry
+  # API support within Datadog SDKs" in the doc. A separate function
+  # (not a modification of otelSandbox) so the two are a fair side-by-side
+  # comparison against the same application logic. See FINDINGS.md "Round 2".
+  ddtraceOtelApi:
+    handler: datadog_lambda.handler.handler
+    package:
+      patterns:
+        - 'handler2.py'
+        - 'vendor-ddtrace/**'
+    environment:
+      PYTHONPATH: /var/task/vendor-ddtrace
+      DD_LAMBDA_HANDLER: handler2.lambda_handler
+      DD_TRACE_ENABLED: true
+      DD_TRACE_OTEL_ENABLED: true
+      DD_SERVICE: ddtrace-otel-api-sandbox
+      DD_ENV: sandbox
+      DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT: localhost:4318
+    layers:
+      # Verified against these versions -- see root README "Layer versions".
+      - arn:aws:lambda:${env:SANDBOX_AWS_REGION, 'us-east-1'}:464622532012:layer:Datadog-Extension:${env:DD_EXTENSION_VERSION, '101'}
+      - arn:aws:lambda:${env:SANDBOX_AWS_REGION, 'us-east-1'}:464622532012:layer:Datadog-Python311:${env:DD_PYTHON_LAYER_VERSION, '128'}
+
+  # "OTel Direct" mode: the OTel SDK exports straight to Datadog's
+  # public OTLP intake endpoint, bypassing the Extension and any
+  # collector entirely. No Datadog-Extension layer attached, on purpose.
+  otelDirectSandbox:
+    handler: handler3.lambda_handler
+    package:
+      patterns:
+        - 'handler3.py'
+        - 'vendor/**'
+    environment:
+      DD_ENV: sandbox
+
+  # "OTel Collector + Datadog exporter" mode: a custom collector layer
+  # (otelcol-dd-sandbox, see otel-collector-dd/) runs as a sidecar
+  # extension; the OTel SDK here points at it, not the Datadog
+  # Extension. No Datadog-Extension layer attached.
+  #
+  # COMMENTED OUT BY DEFAULT. This function needs a LayerVersionArn that
+  # doesn't exist until you build and publish it yourself (requires a Go
+  # toolchain -- see otel-collector-dd/README.md). All five functions in
+  # this file deploy as ONE CloudFormation stack, so leaving a
+  # placeholder/nonexistent ARN here fails the ENTIRE stack's deploy, not
+  # just this function -- that's why it's disabled here instead. Deploying
+  # without this function (the default) is the opt-out; to opt in:
+  #   1. Build+publish the layer per otel-collector-dd/README.md.
+  #   2. Uncomment this whole block.
+  #   3. Replace the LayerVersionArn below with the one you just published.
+  #   4. Redeploy.
+  #
+  # otelCollectorSandbox:
+  #   handler: handler4.lambda_handler
+  #   timeout: 30
+  #   package:
+  #     patterns:
+  #       - 'handler4.py'
+  #       - 'vendor/**'
+  #   environment:
+  #     DD_ENV: sandbox
+  #     # Quietest settings for the collector's own debug exporter/
+  #     # internal logging -- see otel-collector-dd/config.yaml's header
+  #     # comment. Set both to detailed/debug (temporarily) for full
+  #     # span/metric/log body output in CloudWatch.
+  #     OTELCOL_DEBUG_VERBOSITY: basic
+  #     OTELCOL_LOG_LEVEL: info
+  #   layers:
+  #     # Placeholder -- replace with your own published LayerVersionArn.
+  #     - arn:aws:lambda:us-east-1:123456789012:layer:otelcol-dd-sandbox:1
+
+  # ADOT Lambda layer mode, instead of the Datadog Extension. Layer
+  # version verified live via aws lambda get-layer-version-by-arn.
+  # Unlike Datadog's own layers, AWS does NOT publish this ADOT layer's
+  # version numbers consistently across regions -- version 7 is only
+  # confirmed for us-east-1. Deploying to another region needs its own
+  # lookup first:
+  #   aws lambda list-layer-versions --layer-name aws-otel-python-amd64-ver-1-32-0 \
+  #     --region <region> --query 'LayerVersions[].Version'
+  otelAdotSandbox:
+    handler: handler5.lambda_handler
+    timeout: 30
+    package:
+      patterns:
+        - 'handler5.py'
+        - 'adot-collector.yaml'
+        - 'vendor/**'
+    environment:
+      AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
+      OPENTELEMETRY_COLLECTOR_CONFIG_URI: /var/task/adot-collector.yaml
+      OTEL_SERVICE_NAME: otel-adot-sandbox
+      OTEL_PROPAGATORS: tracecontext
+      DD_ENV: sandbox
+      # No Extension here, so DD_ENV alone never becomes the `env` tag --
+      # set it as an OTel resource attribute instead (covers traces too).
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=sandbox,deployment.environment=sandbox
+      # This ADOT layer's aiobotocore instrumentor throws on load, which
+      # aborts the auto-instrumentation loop -- skipping it here lets
+      # everything scheduled after it (incl. botocore) load normally.
+      OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: aiobotocore
+    layers:
+      - arn:aws:lambda:${env:SANDBOX_AWS_REGION, 'us-east-1'}:901920570463:layer:aws-otel-python-amd64-ver-1-32-0:${env:DD_ADOT_LAYER_VERSION, '7'}

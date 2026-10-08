@@ -1,0 +1,39 @@
+# Config for the ADOT Lambda layer's bundled collector (see handler5.py
+# and otelAdotSandbox in serverless.yml). ADOT's collector has no
+# Datadog exporter, so otlphttp relays straight to Datadog's own OTLP
+# intake endpoint instead. DD_SITE is inherited from serverless.yml's
+# provider-level environment (same var otelDirectSandbox's handler3.py
+# reads), so overriding DD_SITE there also redirects this file.
+receivers:
+  otlp:
+    protocols:
+      http:
+      grpc:
+
+exporters:
+  otlphttp:
+    # No inline default here, unlike serverless.yml's ${env:VAR, 'default'}
+    # style -- the OTel Collector's own ${env:VAR} expansion syntax (this
+    # config is loaded by ADOT's bundled collector binary, not Serverless
+    # Framework) doesn't have a confirmed default-value form, so this is
+    # left as a bare reference rather than guessing at syntax that might
+    # silently fail to parse. Works today only because serverless.yml's
+    # provider-level environment always sets DD_SITE (with its own
+    # default) before this function ever runs.
+    endpoint: https://otlp.${env:DD_SITE}
+    headers:
+      dd-api-key: ${env:DD_API_KEY}
+      compute_stats: "true"
+      dd-otlp-source: "serverless"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp]
+    metrics:
+      receivers: [otlp]
+      exporters: [otlphttp]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp]

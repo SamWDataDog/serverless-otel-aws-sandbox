@@ -1,0 +1,71 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.datadog.sandbox</groupId>
+  <artifactId>ddtrace-otel-api-java</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+
+  <!--
+    Round 6, Mode 2: "OpenTelemetry API support within Datadog SDKs",
+    plain OTel API calls, native dd-trace-java underneath
+    (DD_TRACE_OTEL_ENABLED=true), via the dd-trace-java layer. Per
+    Datadog's own doc: "Make sure you only depend on the OpenTelemetry API
+    (and not the OpenTelemetry SDK)", deliberately no opentelemetry-sdk
+    dependency here, unlike OtelSandboxJava's pom.xml. See FINDINGS.md
+    "Round 6" for the registration/nesting investigation this round's
+    rigor is centered on.
+  -->
+
+  <properties>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-lambda-java-core</artifactId>
+      <version>1.4.0</version>
+    </dependency>
+
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-api</artifactId>
+      <version>1.51.0</version>
+    </dependency>
+
+    <!--
+      No manual OTel AWS SDK instrumentation here on purpose. Mode 2
+      relies on dd-trace-java's own automatic AWS SDK v2 instrumentation
+      (activated by the javaagent, the same way Python/Node/.NET's native
+      tracers auto-patch botocore/aws-sdk in their own Mode 2 functions),
+      not a manually-wired OTel interceptor.
+    -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sts</artifactId>
+      <version>2.46.7</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>ddtrace-otel-api-java</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

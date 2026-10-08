@@ -1,0 +1,91 @@
+service: serverless-otel-aws-sandbox-node
+
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  runtime: nodejs24.x
+  # Override with SANDBOX_AWS_REGION/DD_SITE env vars to point this stack
+  # at a different region or Datadog site without hand-editing this file.
+  # Deliberately not AWS_REGION -- that var is already exported in many
+  # shells/CI environments for unrelated reasons, and this stack's layer
+  # ARNs are pinned to versions verified in us-east-1. See the root
+  # README's "Layer versions" section.
+  region: ${env:SANDBOX_AWS_REGION, 'us-east-1'}
+  memorySize: 256
+  timeout: 15
+  # Sandbox log groups default to never-expire otherwise; 7 days is
+  # plenty for a sandbox and keeps teardown from leaving CloudWatch
+  # costs behind indefinitely. Applies to every function in this stack.
+  logRetentionInDays: 7
+  environment:
+    DD_API_KEY: ${env:DD_API_KEY}
+    DD_SITE: ${env:DD_SITE, 'datadoghq.com'}
+    DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT: localhost:4318
+  # sts:GetCallerIdentity needs no IAM permission at all (AWS grants it
+  # unconditionally) -- this repo doesn't grant it. See the root README's
+  # "Known issues and references" / Phase 2 item 10 note if you're
+  # comparing this against the other three language stacks.
+
+package:
+  individually: true
+  patterns:
+    - '!**'
+
+functions:
+  # Round 4, Phase 1: OTel SDK through the Datadog Lambda Extension's OTLP
+  # receiver -- Node equivalent of otelSandbox (handler.py). See
+  # FINDINGS.md "Round 4".
+  otelSandboxNode:
+    handler: src/handler.handler
+    package:
+      patterns:
+        - 'src/handler.js'
+        - 'src/instrument.js'
+        - 'src/otel-esm-hook.mjs'
+        - 'node_modules/**'
+        - '!node_modules/.package-lock.json'
+        # This function exists to prove the no-Datadog-tracing-layer path;
+        # dd-trace is never loaded by this handler, but excluding it keeps
+        # the artifact honest about that claim and smaller. Doesn't change
+        # runtime behavior or invalidate any existing finding.
+        - '!node_modules/dd-trace/**'
+    environment:
+      NODE_OPTIONS: --import /var/task/src/otel-esm-hook.mjs --require /var/task/src/instrument
+      DD_ENV: sandbox
+    layers:
+      # Verified against this version -- see root README "Layer versions".
+      - arn:aws:lambda:${env:SANDBOX_AWS_REGION, 'us-east-1'}:464622532012:layer:Datadog-Extension:${env:DD_EXTENSION_VERSION, '101'}
+
+  # Round 4, Phase 2: native dd-trace-js + OTel API bridge. Node equivalent
+  # of ddtraceOtelApi (handler2.py). Uses the Datadog-Node24-x LAYER's own
+  # dd-trace/datadog-lambda-js, NOT npm-installed copies -- the docs
+  # explicitly warn against installing both the layer and the npm package.
+  # handler2.js actually DOES require both dd-trace (for
+  # `new TracerProvider().register()`) and datadog-lambda-js (for
+  # sendDistributionMetric) -- both resolve from the layer's
+  # /opt/nodejs/node_modules via Lambda's NODE_PATH, not from this
+  # package's own node_modules/. node_modules/dd-trace is excluded below
+  # for that reason: the deployment package never needs its own copy, only
+  # the layer's. That also means this exclusion is fragile -- if this
+  # function's require() resolution ever needed the npm-installed copy
+  # (e.g. a version mismatch workaround), excluding it here would silently
+  # break at runtime instead of failing to package.
+  ddtraceOtelApiNode:
+    handler: /opt/nodejs/node_modules/datadog-lambda-js/handler.handler
+    package:
+      patterns:
+        - 'src/handler2.js'
+        - 'node_modules/**'
+        - '!node_modules/.package-lock.json'
+        - '!node_modules/dd-trace/**'
+    environment:
+      DD_LAMBDA_HANDLER: src/handler2.handler
+      DD_TRACE_ENABLED: true
+      DD_TRACE_OTEL_ENABLED: true
+      DD_SERVICE: ddtrace-otel-api-sandbox-node
+      DD_ENV: sandbox
+    layers:
+      # Verified against these versions -- see root README "Layer versions".
+      - arn:aws:lambda:${env:SANDBOX_AWS_REGION, 'us-east-1'}:464622532012:layer:Datadog-Extension:${env:DD_EXTENSION_VERSION, '101'}
+      - arn:aws:lambda:${env:SANDBOX_AWS_REGION, 'us-east-1'}:464622532012:layer:Datadog-Node24-x:${env:DD_NODE_LAYER_VERSION, '143'}

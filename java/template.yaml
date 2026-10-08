@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Round 6: Java parity for the two OTel Lambda modes tested throughout
+  this repo. Mode 1 (OtelSandboxJavaFunction) is OTel SDK via the Datadog
+  Extension's OTLP receiver, no Datadog tracing layer -- built fresh, since
+  no official Datadog doc sample exists for Java (confirmed, see
+  FINDINGS.md "Round 6"). Mode 2 (DdtraceOtelApiJavaFunction) is native
+  dd-trace-java + the OpenTelemetry API bridge (DD_TRACE_OTEL_ENABLED=true),
+  via the dd-trace-java layer. Deployed via AWS SAM + Maven, matching the
+  .NET round's tooling choice (SAM's Maven build workflow handles the
+  compiled-language packaging more directly than the Serverless Framework's
+  Node-centric defaults used for Python/Node).
+
+Parameters:
+  DatadogApiKey:
+    Type: String
+    NoEcho: true
+    Description: Datadog API key. Pass at deploy time; do not commit a real key.
+  DatadogSite:
+    Type: String
+    Default: datadoghq.com
+    Description: Datadog site (datadoghq.com, datadoghq.eu, ...).
+  ExtensionVersion:
+    Type: String
+    Default: "101"
+    Description: Datadog-Extension layer version (Mode 1). Verified via aws lambda get-layer-version-by-arn, not assumed.
+  JavaTracerVersion:
+    Type: String
+    Default: "28"
+    Description: dd-trace-java layer version (Mode 2). Verified the same way.
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Architectures:
+      - x86_64
+    Runtime: java21
+
+Resources:
+  OtelSandboxJavaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: otel-aws-sandbox-java
+      Description: "Mode 1: OTel SDK via the Datadog Extension's OTLP receiver. No Datadog tracing layer."
+      CodeUri: src/OtelSandboxJava/
+      Handler: com.datadog.sandbox.OtelSandboxHandler
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:464622532012:layer:Datadog-Extension:${ExtensionVersion}
+      Environment:
+        Variables:
+          DD_API_KEY: !Ref DatadogApiKey
+          DD_SITE: !Ref DatadogSite
+          DD_SERVICE: otel-aws-sandbox-java
+          DD_ENV: sandbox
+          DD_TRACE_ENABLED: "false"
+          DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT: localhost:4318
+    Metadata:
+      BuildMethod: java21
+
+  DdtraceOtelApiJavaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ddtrace-otel-api-sandbox-java
+      Description: "Mode 2: native dd-trace-java + OpenTelemetry API bridge (DD_TRACE_OTEL_ENABLED=true)."
+      CodeUri: src/DdtraceOtelApiJava/
+      Handler: com.datadog.sandbox.DdtraceOtelApiHandler
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:464622532012:layer:Datadog-Extension:${ExtensionVersion}
+        - !Sub arn:aws:lambda:${AWS::Region}:464622532012:layer:dd-trace-java:${JavaTracerVersion}
+      Environment:
+        Variables:
+          DD_API_KEY: !Ref DatadogApiKey
+          DD_SITE: !Ref DatadogSite
+          DD_SERVICE: ddtrace-otel-api-sandbox-java
+          DD_ENV: sandbox
+          DD_TRACE_ENABLED: "true"
+          DD_TRACE_OTEL_ENABLED: "true"
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/datadog_wrapper
+      # sts:GetCallerIdentity needs no IAM permission at all (AWS grants
+      # it unconditionally) -- no Policies block here is intentional, not
+      # a gap. OtelSandboxJavaFunction above also calls STS and also has
+      # no grant, for the same reason. See the root README's Phase 2 item
+      # 10 note.
+    Metadata:
+      BuildMethod: java21
+
+  # AWS::Serverless::Function has no retention property of its own --
+  # declaring the log group explicitly (same name Lambda would otherwise
+  # auto-create) is the standard SAM/CloudFormation way to get CFN to
+  # manage retention instead of leaving a never-expire group behind
+  # after `sam delete`. Not verified against a live deploy.
+  OtelSandboxJavaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${OtelSandboxJavaFunction}
+      RetentionInDays: 7
+
+  DdtraceOtelApiJavaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${DdtraceOtelApiJavaFunction}
+      RetentionInDays: 7
+
+Outputs:
+  OtelSandboxJavaFunctionName:
+    Value: !Ref OtelSandboxJavaFunction
+  OtelSandboxJavaLogGroup:
+    Value: !Sub /aws/lambda/${OtelSandboxJavaFunction}
+  DdtraceOtelApiJavaFunctionName:
+    Value: !Ref DdtraceOtelApiJavaFunction
+  DdtraceOtelApiJavaLogGroup:
+    Value: !Sub /aws/lambda/${DdtraceOtelApiJavaFunction}

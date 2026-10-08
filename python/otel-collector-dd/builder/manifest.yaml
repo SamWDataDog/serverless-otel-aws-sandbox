@@ -1,0 +1,17 @@
+dist:
+  name: otelcol-dd-lambda
+  description: Minimal OTel Collector + Datadog exporter, for Lambda sidecar testing
+  output_path: ./build
+  otelcol_version: 0.137.0
+
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.137.0
+
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.137.0
+
+exporters:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datadogexporter v0.137.0
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.137.0
+
+extensions: []

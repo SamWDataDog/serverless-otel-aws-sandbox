@@ -1,0 +1,56 @@
+# OTELCOL_DEBUG_VERBOSITY/OTELCOL_LOG_LEVEL have no inline default here
+# (same reason as DD_SITE in ../adot-collector.yaml -- this collector's
+# own ${env:VAR} expansion has no confirmed default-value syntax). Their
+# actual defaults are supplied by serverless.yml's otelCollectorSandbox
+# function environment (OTELCOL_DEBUG_VERBOSITY=basic,
+# OTELCOL_LOG_LEVEL=info), the quietest settings the debug exporter and
+# collector's own internal logging support. Set both to "detailed"/"debug"
+# there (temporarily) for the behavior this file used to hardcode --
+# every span/metric/log body printed to CloudWatch on every invocation.
+#
+# NOTE: the `debug` exporter itself still exists in all three pipelines
+# below either way -- plain OTel Collector config has no way to
+# conditionally omit a pipeline's exporter list entry via env-var
+# substitution alone (no templating/conditionals, just string
+# expansion). "basic" verbosity logs one summary line per export batch,
+# not the full body; it is not a complete no-op the way
+# TEST_UNSUPPORTED_SIGNALS's Python conditional is in ../handler.py.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+      grpc:
+        endpoint: 127.0.0.1:4317
+
+processors:
+  batch:
+    timeout: 1s
+
+exporters:
+  datadog:
+    api:
+      key: ${env:DD_API_KEY}
+      site: ${env:DD_SITE}
+    host_metadata:
+      enabled: false
+  debug:
+    verbosity: ${env:OTELCOL_DEBUG_VERBOSITY}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [datadog, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [datadog, debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [datadog, debug]
+  telemetry:
+    logs:
+      level: ${env:OTELCOL_LOG_LEVEL}

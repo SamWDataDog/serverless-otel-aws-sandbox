@@ -1,0 +1,1 @@
+datadog-lambda==8.128.0

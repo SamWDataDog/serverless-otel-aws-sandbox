@@ -1,0 +1,9 @@
+{
+  "name": "serverless-otel-aws-sandbox",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sandbox: OTel SDK traces through the Datadog Lambda Extension's local OTLP receiver.",
+  "devDependencies": {
+    "serverless": "^4.43.0"
+  }
+}

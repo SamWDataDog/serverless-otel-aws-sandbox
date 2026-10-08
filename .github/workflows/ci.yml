@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Everything here is a local syntax/parse/dry-run check. Nothing in
+# this workflow requires AWS or Datadog credentials, builds anything,
+# or deploys anything -- see README.md's "Maintenance" section.
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install PyYAML (for check-yaml.py)
+        run: pip install pyyaml
+
+      - name: Markdown anchor links resolve
+        run: python3 scripts/check-anchors.py
+
+      - name: YAML/SAM template configs parse
+        run: python3 scripts/check-yaml.py
+
+      - name: Python files compile
+        run: python3 -m py_compile python/*.py scripts/*.py
+
+      - name: Node files parse
+        run: |
+          for f in node/src/*.js; do
+            echo "node --check $f"
+            node --check "$f"
+          done
+
+      - name: Shell scripts parse
+        run: bash -n scripts/verify.sh
+
+      - name: Shellcheck
+        run: shellcheck scripts/verify.sh
+
+      - name: Makefile recipes parse, and deploy recipe never echoes a credential
+        # DD_API_KEY/DD_APP_KEY are deliberately set to an obviously-fake
+        # canary value (not a real key, safe to appear in these logs) so
+        # this is an actual regression test, not just a syntax check: if
+        # dotnet/Makefile or java/Makefile's deploy recipe ever got
+        # "simplified" back to interpolating the key through make (losing
+        # the @ and $$ fix), `make -n`'s dry-run output would contain the
+        # literal canary string, and this step fails the build. With the
+        # fix in place, the only thing printed is the unexpanded
+        # $DD_API_KEY shell reference, which never matches the canary.
+        env:
+          DD_API_KEY: ci-canary-not-a-real-key
+          DD_APP_KEY: ci-canary-not-a-real-key
+        run: |
+          for dir in python node dotnet java; do
+            out=$(cd "$dir" && make -n build deploy invoke verify destroy)
+            echo "$out"
+            if grep -q "ci-canary-not-a-real-key" <<<"$out"; then
+              echo "::error::$dir/Makefile echoed a credential"; exit 1
+            fi
+          done
