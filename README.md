@@ -188,8 +188,12 @@ documented open question, not an action item assigned to anyone.
 This repo is public. It is licensed under the MIT License (see
 `LICENSE`), with one exception: the .NET Mode 1 function derives from
 [Siddhitha Bhoopathy's sample](https://github.com/SiddhithaBhoopathy/otel-dotnet-lambda-extension-samples),
-which is not covered by this repo's license — attribution to that
-sample is preserved in the code itself (`dotnet/src/OtelSandboxDotnet/`).
+which is not covered by this repo's license. That source repo has no
+`LICENSE` file anywhere in it — verified directly (GitHub's license
+API and a full recursive tree listing both confirm it), not assumed —
+so it's all-rights-reserved by default under copyright law. Attribution
+to that sample is preserved in the code itself
+(`dotnet/src/OtelSandboxDotnet/`).
 
 CI (`.github/workflows/ci.yml`) runs `scripts/check-anchors.py` and
 `scripts/check-yaml.py`, Python/Node/shell syntax checks across every

@@ -673,8 +673,8 @@ itself: **confirmed present**, checked directly against live
 Datadog data — `ddtrace_otel_api_sandbox.custom_metric_test` carries
 `env:sandbox`, even though the raw UDP packet never sets it explicitly.
 The Datadog Lambda Extension enriches custom DogStatsD metrics with
-`env` server-side, the same mechanism already confirmed for traces —
-nothing needed to be set in the sending code. Incidental cross-check
+`env` before forwarding them, the same mechanism already confirmed for
+traces — nothing needed to be set in the sending code. Incidental cross-check
 from the same tag dump: this metric's `dd_extension_version` reads
 `100-next`, versus `101-next` for Node's and Java's equivalent metrics —
 independent confirmation, from live tag data rather than config
@@ -1546,8 +1546,8 @@ Datadog data — `ddtrace_otel_api_sandbox_node.custom_metric_test` carries
 `env:sandbox`, despite deliberately not adding it as a manual tag (that
 would have defeated the point of testing whether it's auto-attached).
 The Datadog Lambda Extension enriches custom DogStatsD metrics with
-`env` server-side, the same mechanism already confirmed for traces —
-nothing needed to be set in the sending code.
+`env` before forwarding them, the same mechanism already confirmed for
+traces — nothing needed to be set in the sending code.
 
 ---
 
@@ -1585,6 +1585,17 @@ comment at the top of `Function.cs` citing the original repo), with
 `template.yaml` here deploying it as `OtelSandboxDotnetFunction`
 (`otel-aws-sandbox-dotnet`) alongside Mode 2 in one stack — not from a
 separate clone anymore.
+
+**License status, verified directly, not inferred** (added on a later
+pass, after this repo itself went public): `SiddhithaBhoopathy/otel-
+dotnet-lambda-extension-samples` has no `LICENSE` file anywhere in its
+tree — confirmed via GitHub's own license-detection API (`license:
+null`) and a full recursive tree listing (`git/trees/main
+?recursive=true`) of every file in the repo, not just its root. No
+license means all-rights-reserved by default under copyright law —
+this repo's own ported code keeps the attribution comment for that
+reason, and this repo's MIT `LICENSE` explicitly carves out that one
+file as not covered by it.
 
 **Re-verified it still deploys and works, built and deployed from this
 repo's own files:**
@@ -2479,9 +2490,9 @@ Datadog data — `ddtrace_otel_api_sandbox_java.custom_metric_test` carries
 `env:sandbox`, same result as Python's and Node's equivalent follow-up
 tests, despite the raw UDP packet never setting it explicitly. The
 Datadog Lambda Extension enriches custom DogStatsD metrics with `env`
-server-side, the same mechanism already confirmed for traces — nothing
-needed to be set in the sending code, for any of the three languages
-tested.
+before forwarding them, the same mechanism already confirmed for traces
+— nothing needed to be set in the sending code, for any of the three
+languages tested.
 
 All three functions (Python's `ddtraceOtelApi`, Node's
 `ddtraceOtelApiNode`, Java's `DdtraceOtelApiJavaFunction`) were redeployed
@@ -2821,7 +2832,21 @@ that's worth noting for the doc, not treating as inconsistent.
   This silently drops Counter/Sum metrics with no local error at all —
   neither mode that hit this (OTel Direct, ADOT) produced any error,
   warning, or log line suggesting a problem. The only way this surfaced
-  was a live ingestion check finding the metric genuinely absent. Fixed
+  was a live ingestion check finding the metric genuinely absent.
+  **Clarifying this round's own claim, on a later re-read**: "silently"
+  here describes what this testing actually observed —
+  no client-side error from the SDK/exporter, and no server response
+  inspected or logged either way. Datadog's public OTLP metrics docs
+  state that sending cumulative-temporality metrics to the intake
+  "will result in an error," i.e. a server-side rejection, not a silent
+  drop. This round's testing never checked the OTLP exporter's actual
+  HTTP response code/body for that request — only the absence of any
+  local error and the metric's absence in the UI — so whether Datadog's
+  backend did in fact return an error response (that simply went
+  unobserved/unlogged here) or genuinely dropped the data with no
+  response at all was never actually determined. Recorded as a gap in
+  this round's own observability, not a correction to the finding that
+  the metric was absent and the fix resolved it. Fixed
   via `OTLPMetricExporter(preferred_temporality={Counter:
   AggregationTemporality.DELTA})`.
 - **The `DD_ENV`→`env`-tag translation is Extension-side, not an OTel or
@@ -3160,3 +3185,59 @@ be) needs a redeploy and re-invoke to confirm.
 | **Java Mode 1 span indexing (the headline issue)** | Debug the three hypotheses above, then redeploy |
 | `OTEL_SERVICE_NAME` isolation test | Redeploy one function with its Resource-based service name removed, to isolate whether `OTEL_SERVICE_NAME` or the Resource attribute is actually doing the work |
 | Node Mode 1 correlated logs | Apply the log-forwarding fix above, then invoke to confirm logs actually reach Datadog |
+
+## Round 11: documented OTLP serverless intake requirements vs. OTDI's actual behavior
+
+Sourced directly from Datadog's public docs —
+[OTLP Serverless Intake](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest/serverless/?tab=aws),
+AWS tab — not inferred from this repo's own testing. This applies
+specifically to the two modes in this repo that send OTLP straight to
+Datadog's intake with no Extension/Agent/Collector in between:
+**OTel Direct (OTDI, `otelDirectSandbox`/`handler3.py`)** and **ADOT
+(OTS, `otelAdotSandbox`/`handler5.py`, via its bundled collector's
+`otlphttp` relay)**. It does not apply to Mode 1, Mode 2, or the
+Collector mode (OTSDD) — none of those send OTLP directly to the
+public intake endpoint the way these two do.
+
+**Required headers**, per the doc: `dd-api-key` (the API key itself);
+`dd-otlp-source`, set to `serverless`; `compute_stats`, set to `true`
+("Required for trace metrics"). Both `otelDirectSandbox` and the ADOT
+collector config already set all three — confirmed by re-reading
+`handler3.py` and `adot-collector.yaml` directly, not assumed.
+
+**Resource attributes for AWS Lambda**, per the same doc:
+
+| Attribute | Doc's stated requirement |
+|---|---|
+| `cloud.provider` | **Required** — "Set to `aws`" |
+| `faas.id` (the Lambda function ARN) | **Recommended** — "preferred for platform identification" |
+| `cloud.platform` | **Conditional fallback** — "Set to `aws_lambda` if `faas.id` is not set" |
+| `cloud.region`, `faas.name`, `faas.version`, `faas.instance`, `faas.max_memory`, `aws.log.group.names`, `aws.log.stream.names` | Optional |
+
+### Open, unresolved discrepancy — not fixed, not explained away here
+
+**`otelDirectSandbox`'s `Resource.create()` call (`handler3.py`) never
+sets `cloud.provider`, `faas.id`, or `cloud.platform` — confirmed by
+reading the actual code, which only sets `service.name` and
+`deployment.environment`(`.name`).** Despite that, Round 7 confirmed
+this function's traces landed successfully (3 spans, via a live
+Datadog data check) with no indication of the rejection or missing-data
+behavior the "required" framing would suggest. This doesn't obviously
+square with `cloud.provider` being documented as required for AWS
+Lambda resource identification.
+
+No attempt is made here to resolve this one way or the other — it's
+recorded as a real, confirmed discrepancy between documented
+requirements and observed behavior, worth confirming with Datadog's
+serverless/billing team directly (the same escalation treatment the
+reference doc gets elsewhere in this repo for open questions, e.g. the
+Universal Instrumentation lead in Round 5). Possibilities not
+distinguished between: the "required" framing is about billing/platform
+cost-attribution correctly, not about whether the trace is accepted and
+indexed at all (i.e., ingestion vs. attribution are separate gates, and
+only the latter needs `cloud.provider`); some other mechanism in the
+Lambda OTLP exporter/AWS Lambda resource detector populates an
+equivalent signal this repo didn't check for; or the doc's "required"
+language is aspirational/for billing accuracy rather than a hard
+ingestion gate. Any of these would need direct confirmation from
+Datadog, not another round of this repo's own testing.
